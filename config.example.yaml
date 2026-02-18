@@ -1,0 +1,64 @@
+# jobly configuration
+# Copy to ~/.config/jobly/config.yaml and edit as needed.
+
+gmail:
+  # Sender filter for SWEList digest emails
+  sender_filter: "noreply@swelist.com"
+  # Optional additional subject substring filter (empty = no filter)
+  subject_filter: ""
+  # How many days back to look for emails (2 catches weekend digests on Monday)
+  lookback_days: 2
+  # Maximum number of emails to process per fetch
+  max_results: 10
+
+filter:
+  # Minimum fit score to queue a job (0.0–1.0)
+  min_score: 0.30
+  # Title keywords that increase score
+  title_keywords:
+    - "intern"
+    - "internship"
+    - "swe"
+    - "software engineer"
+    - "backend"
+    - "platform"
+    - "infra"
+    - "infrastructure"
+    - "data"
+    - "distributed"
+    - "database"
+    - "systems"
+  # ATS types in preference order (each gets a score boost)
+  preferred_ats:
+    - "ashby"
+    - "greenhouse"
+    - "lever"
+  # Location substrings to prefer (empty = no location filter applied)
+  preferred_locations: []
+  # Location substrings to exclude
+  excluded_locations: []
+
+browser:
+  # Run browser in headless mode (false = visible, recommended for review)
+  headless: false
+  # Slow down Playwright actions by N ms (helps avoid bot detection)
+  slow_mo_ms: 100
+  # Default timeout for Playwright waits (ms)
+  timeout_ms: 30000
+  # Random wait range between actions (ms) — avoids bot detection
+  min_wait_ms: 300
+  max_wait_ms: 1200
+
+llm:
+  # Enable the optional LLM evaluation step before submit prompt
+  enabled: true
+  # Claude model to use
+  model: "claude-sonnet-4-6"
+  max_tokens: 1024
+
+# Resume paths
+resume_default_path: "~/Documents/resume.pdf"
+# Optional named variants: use with --resume=ml flag
+resume_variants: {}
+#  ml: "~/Documents/resume_ml.pdf"
+#  backend: "~/Documents/resume_be.pdf"

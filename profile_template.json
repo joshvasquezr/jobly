@@ -1,0 +1,50 @@
+{
+  "_comment": "Copy to ~/.config/jobly/profile.json and fill in your real info. Never commit this file.",
+  "personal": {
+    "first_name": "YOUR_FIRST_NAME",
+    "last_name": "YOUR_LAST_NAME",
+    "email": "your@email.com",
+    "phone": "+1 (555) 123-4567",
+    "location": {
+      "city": "Your City",
+      "state": "CA",
+      "country": "United States",
+      "zip": "94105"
+    },
+    "linkedin_url": "https://linkedin.com/in/yourhandle",
+    "github_url": "https://github.com/yourhandle",
+    "website_url": "",
+    "pronouns": ""
+  },
+  "education": [
+    {
+      "institution": "Your University",
+      "degree": "Bachelor of Science",
+      "field_of_study": "Computer Science",
+      "start_date": "2022-09",
+      "end_date": "2026-05",
+      "gpa": "3.8",
+      "gpa_scale": "4.0",
+      "is_current": true
+    }
+  ],
+  "work_authorization": {
+    "authorized_us": true,
+    "requires_sponsorship": false,
+    "visa_type": ""
+  },
+  "demographics": {
+    "gender": "Decline to state",
+    "race_ethnicity": "Decline to state",
+    "veteran_status": "I am not a protected veteran",
+    "disability_status": "I don't wish to answer"
+  },
+  "short_answers": {
+    "why_interested_template": "I'm excited about this opportunity because it aligns with my background in software engineering and my passion for building scalable systems.",
+    "strengths": "Strong problem-solving skills, quick learner, collaborative team member.",
+    "weakness": "I sometimes spend too long optimizing code before shipping; I've been working on balancing perfectionism with pragmatism.",
+    "salary_expectation": "",
+    "availability": "Summer 2026 (May–August)",
+    "hours_per_week": "40"
+  }
+}
