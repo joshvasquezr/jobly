@@ -30,7 +30,7 @@ log = get_logger(__name__)
 _ATS_DOMAINS = re.compile(
     r"(ashbyhq\.com|greenhouse\.io|lever\.co|myworkdayjobs\.com|"
     r"smartrecruiters\.com|icims\.com|taleo\.net|grnh\.se|"
-    r"breezy\.hr|jobvite\.com|bamboohr\.com|workable\.com)",
+    r"breezy\.hr|jobvite\.com|bamboohr\.com|workable\.com|simplify\.jobs)",
     re.IGNORECASE,
 )
 
@@ -123,8 +123,12 @@ def _extract_candidates(
     """
     candidates: list[tuple[str, str, str, Optional[str]]] = []
 
+    # Strategy 0: SWEList <p class="internship"> format
+    candidates.extend(_strategy_swelist_paragraphs(soup))
+
     # Strategy 1: structured job rows/cards
-    candidates.extend(_strategy_structured_cards(soup))
+    if not candidates:
+        candidates.extend(_strategy_structured_cards(soup))
 
     # Strategy 2: ATS links with context inference
     if not candidates:
@@ -135,6 +139,31 @@ def _extract_candidates(
         candidates.extend(_strategy_job_path_links(soup))
 
     return candidates
+
+
+def _strategy_swelist_paragraphs(
+    soup: BeautifulSoup,
+) -> list[tuple[str, str, str, Optional[str]]]:
+    """
+    Handle SWEList's native email format:
+      <p class="internship">
+        <strong>Company Name:</strong>
+        <a href="https://simplify.jobs/p/...">Job Title</a>
+      </p>
+    """
+    results = []
+    for p in soup.find_all("p", class_="internship"):
+        link = p.find("a", href=True)
+        if not link:
+            continue
+        title = _clean_text(link.get_text())
+        if not title or title.lower() in _SKIP_TEXTS:
+            continue
+        strong = p.find("strong")
+        company = _clean_text(strong.get_text()).rstrip(":") if strong else "Unknown Company"
+        location = _infer_location(p)
+        results.append((company, title, link["href"], location))
+    return results
 
 
 def _strategy_structured_cards(

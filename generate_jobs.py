@@ -51,11 +51,20 @@ TITLE_KEYWORDS = [
     "computer science",
 ]
 
-# Clean "preferred" ATS — streamlined apply flows
-PREFERRED_ATS = {"ashby", "greenhouse", "lever"}
+# No login needed — apply in minutes
+QUICK_ATS = {
+    "ashby", "greenhouse", "lever",
+    "workable", "breezy", "jazzhr",
+    "rippling", "recruitee",
+}
 
-# Skip entirely — require account creation and are painful
-SKIP_ATS = {"workday", "taleo"}
+# Require account creation — longer process
+ACCOUNT_ATS = {
+    "workday", "taleo", "icims",
+    "smartrecruiters", "oracle", "sap",
+    "dayforce", "adp", "bamboohr", "bullhorn",
+}
+# Everything else (unknown ATS) defaults to Quick Apply
 
 # Drop listings older than this many days
 MAX_AGE_DAYS = 60
@@ -82,6 +91,26 @@ def detect_ats(url: str) -> str:
         return "workable"
     if "breezy.hr" in u:
         return "breezy"
+    if "jazzhr.com" in u:
+        return "jazzhr"
+    if "rippling.com" in u:
+        return "rippling"
+    if "jobvite.com" in u:
+        return "jobvite"
+    if "recruitee.com" in u:
+        return "recruitee"
+    if "bamboohr.com" in u:
+        return "bamboohr"
+    if "oraclecloud.com" in u:
+        return "oracle"
+    if "successfactors.com" in u:
+        return "sap"
+    if "dayforce.com" in u:
+        return "dayforce"
+    if "adp.com" in u:
+        return "adp"
+    if "bullhorn.com" in u:
+        return "bullhorn"
     return "other"
 
 
@@ -175,8 +204,6 @@ def fetch_jobs() -> list[dict]:
             continue
 
         ats = detect_ats(url)
-        if ats in SKIP_ATS:
-            continue
 
         # Parse age with unit awareness; normalize to days
         age_str = _clean(age_td.get_text(strip=True)) if age_td else ""
@@ -209,10 +236,22 @@ _ATS_COLORS = {
     "icims":           "#0891B2",
     "breezy":          "#0D9488",
     "smartrecruiters": "#B45309",
+    "workday":         "#CC0000",
+    "taleo":           "#B45309",
+    "jazzhr":          "#E11D48",
+    "rippling":        "#6366F1",
+    "jobvite":         "#0369A1",
+    "recruitee":       "#0891B2",
+    "bamboohr":        "#16A34A",
+    "oracle":          "#C2410C",
+    "sap":             "#1D4ED8",
+    "dayforce":        "#7C3AED",
+    "adp":             "#BE185D",
+    "bullhorn":        "#0F766E",
     "other":           "#4B5563",
 }
 
-# Secondary sort key within same age — preferred ATS first
+# Secondary sort key within same age — quick-apply ATS first
 _ATS_ORDER = {"ashby": 0, "greenhouse": 1, "lever": 2}
 
 
@@ -240,7 +279,7 @@ def _age_label(j: dict) -> str:
 
 def _rows(jobs: list[dict], section_cls: str) -> str:
     if not jobs:
-        return "<tr><td colspan='7' class='empty'>No jobs in this category.</td></tr>"
+        return "<tr><td colspan='8' class='empty'>No jobs in this category.</td></tr>"
     parts = []
     for j in jobs:
         url_esc = j["url"].replace("'", "&#39;")
@@ -252,6 +291,7 @@ def _rows(jobs: list[dict], section_cls: str) -> str:
             f"<td class='loc'>{j['location']}</td>"
             f"<td>{_badge(j['ats'])}</td>"
             f"<td><button class='btn' onclick='applyClicked(this)'>Apply →</button></td>"
+            f"<td class='save-cell'><button class='save-btn' onclick='markSaved(this)' title='Save for later'>&#9733;</button></td>"
             f"<td class='skip-cell'><button class='skip-btn' onclick='markSkipped(this)' title='Not interested'>✕</button></td>"
             f"</tr>"
         )
@@ -264,7 +304,7 @@ def _section(title: str, jobs: list[dict], cls: str) -> str:
 <div class="section {cls}">
   <h2>{title} <span class="cnt">({len(jobs)})</span></h2>
   <table>
-    <thead><tr><th>Age</th><th>Company</th><th>Role</th><th>Location</th><th>ATS</th><th></th><th></th></tr></thead>
+    <thead><tr><th>Age</th><th>Company</th><th>Role</th><th>Location</th><th>ATS</th><th></th><th></th><th></th></tr></thead>
     <tbody id="{cls}-tbody">{_rows(jobs_sorted, cls)}</tbody>
   </table>
 </div>"""
@@ -275,11 +315,14 @@ _JS = """
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const SUBMITTED_KEY = "jobly_submitted";
 const SKIPPED_KEY   = "jobly_skipped";
+const SAVED_KEY     = "jobly_saved";
 
 function getSubmitted() { return JSON.parse(localStorage.getItem(SUBMITTED_KEY) || "{}"); }
 function getSkipped()   { return JSON.parse(localStorage.getItem(SKIPPED_KEY)   || "{}"); }
+function getSaved()     { return JSON.parse(localStorage.getItem(SAVED_KEY)     || "{}"); }
 function saveSubmitted(o) { localStorage.setItem(SUBMITTED_KEY, JSON.stringify(o)); }
 function saveSkipped(o)   { localStorage.setItem(SKIPPED_KEY,   JSON.stringify(o)); }
+function saveSaved(o)     { localStorage.setItem(SAVED_KEY,     JSON.stringify(o)); }
 
 function findRow(url) {
   const all = document.querySelectorAll("tr[data-url]");
@@ -293,8 +336,8 @@ function applyClicked(btn) {
   window.open(row.dataset.url, "_blank");
   btn.closest("td").innerHTML =
     "Submitted? " +
-    "<button class='confirm-btn yes-btn' onclick='confirmSubmit(this)'>✓ Yes</button> " +
-    "<button class='confirm-btn no-btn'  onclick='cancelSubmit(this)'>✗ No</button>";
+    "<button class='confirm-btn yes-btn' onclick='confirmSubmit(this)'>&#10003; Yes</button> " +
+    "<button class='confirm-btn no-btn'  onclick='cancelSubmit(this)'>&#10007; No</button>";
 }
 
 function confirmSubmit(btn) {
@@ -309,16 +352,19 @@ function confirmSubmit(btn) {
 
 function cancelSubmit(btn) {
   btn.closest("td").innerHTML =
-    "<button class='btn' onclick='applyClicked(this)'>Apply →</button>";
+    "<button class='btn' onclick='applyClicked(this)'>Apply &#8594;</button>";
 }
 
 function moveToSubmitted(row, dateStr) {
+  const section = row.dataset.section;
   const cells = row.querySelectorAll("td");
   cells[5].innerHTML = "<span class='date-submitted'>" + dateStr + "</span>";
-  cells[6].innerHTML = "<button class='undo-btn' onclick='undoSubmitted(this)'>Undo</button>";
+  cells[6].innerHTML = "";
+  cells[7].innerHTML = "<button class='undo-btn' onclick='undoSubmitted(this)'>Undo</button>";
   row.classList.add("submitted-row");
   document.getElementById("submitted-tbody").appendChild(row);
   updateSubmittedCount();
+  _updateTabCount(section);
 }
 
 function undoSubmitted(btn) {
@@ -329,28 +375,68 @@ function undoSubmitted(btn) {
   delete s[url];
   saveSubmitted(s);
   const cells = row.querySelectorAll("td");
-  cells[5].innerHTML = "<button class='btn' onclick='applyClicked(this)'>Apply →</button>";
-  cells[6].innerHTML = "<button class='skip-btn' onclick='markSkipped(this)' title='Not interested'>✕</button>";
+  cells[5].innerHTML = "<button class='btn' onclick='applyClicked(this)'>Apply &#8594;</button>";
+  cells[6].innerHTML = "<button class='save-btn' onclick='markSaved(this)' title='Save for later'>&#9733;</button>";
+  cells[7].innerHTML = "<button class='skip-btn' onclick='markSkipped(this)' title='Not interested'>&#10005;</button>";
   row.classList.remove("submitted-row");
   const tbody = document.getElementById(section + "-tbody");
   if (tbody) tbody.appendChild(row);
   updateSubmittedCount();
+  _updateTabCount(section);
+}
+
+// ── Save / Saved ──────────────────────────────────────────────────────────────
+function markSaved(btn) {
+  const row     = btn.closest("tr");
+  const url     = row.dataset.url;
+  const section = row.dataset.section;
+  const sv  = getSaved();
+  sv[url]   = {};
+  saveSaved(sv);
+  _doSave(row);
+  updateSavedCount();
+  _updateTabCount(section);
+}
+
+function _doSave(row) {
+  const cells = row.querySelectorAll("td");
+  cells[6].innerHTML = "<button class='undo-btn' onclick='undoSaved(this)'>Undo</button>";
+  row.classList.add("saved-row");
+  document.getElementById("saved-tbody").appendChild(row);
+}
+
+function undoSaved(btn) {
+  const row     = btn.closest("tr");
+  const url     = row.dataset.url;
+  const section = row.dataset.section;
+  const sv = getSaved();
+  delete sv[url];
+  saveSaved(sv);
+  const cells = row.querySelectorAll("td");
+  cells[6].innerHTML = "<button class='save-btn' onclick='markSaved(this)' title='Save for later'>&#9733;</button>";
+  row.classList.remove("saved-row");
+  const tbody = document.getElementById(section + "-tbody");
+  if (tbody) tbody.appendChild(row);
+  updateSavedCount();
+  _updateTabCount(section);
 }
 
 // ── Skip / Hidden ─────────────────────────────────────────────────────────────
 function markSkipped(btn) {
-  const row = btn.closest("tr");
-  const url = row.dataset.url;
+  const row     = btn.closest("tr");
+  const url     = row.dataset.url;
+  const section = row.dataset.section;
   const sk  = getSkipped();
   sk[url]   = {};
   saveSkipped(sk);
   _doSkip(row);
   updateHiddenCount();
+  _updateTabCount(section);
 }
 
 function _doSkip(row) {
   const cells = row.querySelectorAll("td");
-  cells[6].innerHTML = "<button class='undo-btn' onclick='undoSkipped(this)'>Undo</button>";
+  cells[7].innerHTML = "<button class='undo-btn' onclick='undoSkipped(this)'>Undo</button>";
   row.classList.add("skipped-row");
   document.getElementById("hidden-tbody").appendChild(row);
 }
@@ -363,11 +449,12 @@ function undoSkipped(btn) {
   delete sk[url];
   saveSkipped(sk);
   const cells = row.querySelectorAll("td");
-  cells[6].innerHTML = "<button class='skip-btn' onclick='markSkipped(this)' title='Not interested'>✕</button>";
+  cells[7].innerHTML = "<button class='skip-btn' onclick='markSkipped(this)' title='Not interested'>&#10005;</button>";
   row.classList.remove("skipped-row");
   const tbody = document.getElementById(section + "-tbody");
   if (tbody) tbody.appendChild(row);
   updateHiddenCount();
+  _updateTabCount(section);
 }
 
 // ── Tab navigation ────────────────────────────────────────────────────────────
@@ -376,7 +463,7 @@ function switchTab(name) {
     t.classList.toggle("active", t.dataset.tab === name));
   document.querySelectorAll(".tab-panel").forEach(p =>
     p.classList.toggle("active", p.id === "tab-" + name));
-  const showSearch = name === "preferred" || name === "other";
+  const showSearch = name === "quick" || name === "account";
   document.getElementById("search-wrap").style.display = showSearch ? "" : "none";
 }
 
@@ -391,10 +478,21 @@ function updateHiddenCount() {
   document.getElementById("hidden-tab-cnt").textContent = "(" + n + ")";
 }
 
+function updateSavedCount() {
+  const n = document.getElementById("saved-tbody").rows.length;
+  document.getElementById("saved-tab-cnt").textContent = "(" + n + ")";
+}
+
+function _updateTabCount(section) {
+  const tbody = document.getElementById(section + "-tbody");
+  const span  = document.getElementById(section + "-tab-cnt");
+  if (tbody && span) span.textContent = "(" + tbody.rows.length + ")";
+}
+
 // ── Search ────────────────────────────────────────────────────────────────────
 function filterRows(q) {
   q = q.toLowerCase();
-  document.querySelectorAll("#preferred-tbody tr, #other-tbody tr").forEach(function(row) {
+  document.querySelectorAll("#quick-tbody tr, #account-tbody tr").forEach(function(row) {
     var text = row.textContent.toLowerCase();
     row.classList.toggle("hidden", q.length > 0 && !text.includes(q));
   });
@@ -407,21 +505,29 @@ window.addEventListener("DOMContentLoaded", function() {
     const row = findRow(url);
     if (row) moveToSubmitted(row, meta.date_submitted);
   }
+  const saved = getSaved();
+  for (const url of Object.keys(saved)) {
+    const row = findRow(url);
+    if (row) _doSave(row);
+  }
   const skipped = getSkipped();
   for (const url of Object.keys(skipped)) {
     const row = findRow(url);
     if (row) _doSkip(row);
   }
+  updateSavedCount();
   updateHiddenCount();
-  switchTab("preferred");
+  _updateTabCount("quick");
+  _updateTabCount("account");
+  switchTab("quick");
   document.getElementById("search").focus();
 });
 """
 
 
 def generate_html(jobs: list[dict]) -> str:
-    preferred = [j for j in jobs if j["ats"] in PREFERRED_ATS]
-    other     = [j for j in jobs if j["ats"] not in PREFERRED_ATS]
+    quick   = [j for j in jobs if j["ats"] in QUICK_ATS or j["ats"] not in ACCOUNT_ATS]
+    account = [j for j in jobs if j["ats"] in ACCOUNT_ATS]
     ts = datetime.now().strftime("%b %d %Y, %I:%M %p")
 
     return f"""<!DOCTYPE html>
@@ -433,7 +539,7 @@ def generate_html(jobs: list[dict]) -> str:
 <title>Summer 2026 Internships</title>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0d1117;color:#c9d1d9;padding:32px;font-size:14px}}
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0d1117;color:#c9d1d9;padding:20px;font-size:14px}}
 h1{{font-size:1.5rem;font-weight:700;color:#f0f6fc;margin-bottom:4px}}
 .meta{{color:#8b949e;font-size:0.82rem;margin-bottom:8px}}
 .search-wrap{{margin-bottom:28px;margin-top:16px}}
@@ -442,11 +548,12 @@ h1{{font-size:1.5rem;font-weight:700;color:#f0f6fc;margin-bottom:4px}}
 #search::placeholder{{color:#484f58}}
 .section{{margin-bottom:36px}}
 h2{{font-size:1rem;font-weight:600;padding:10px 14px;border-radius:6px;margin-bottom:1px}}
-.preferred h2{{background:#0d2818;color:#3fb950;border-left:3px solid #238636}}
-.other h2{{background:#0d1b2e;color:#79c0ff;border-left:3px solid #1f6feb}}
+.quick h2{{background:#0d2818;color:#3fb950;border-left:3px solid #238636}}
+.account h2{{background:#1a1200;color:#d29922;border-left:3px solid #9e6a03}}
+.saved-section h2{{background:#0d1b2e;color:#79c0ff;border-left:3px solid #1f6feb}}
 .submitted-section h2{{background:#0a2a1a;color:#6e9f7f;border-left:3px solid #238636}}
 .hidden-section h2{{background:#1a1212;color:#6e7681;border-left:3px solid #30363d}}
-.tab-bar{{display:flex;gap:4px;margin-bottom:0;border-bottom:1px solid #21262d;padding-bottom:0}}
+.tab-bar{{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:0;border-bottom:1px solid #21262d;padding-bottom:0}}
 .tab{{background:none;color:#8b949e;padding:8px 16px;border-radius:6px 6px 0 0;font-size:0.88rem;font-weight:500;border:1px solid transparent;border-bottom:none;margin-bottom:-1px;cursor:pointer}}
 .tab:hover{{color:#c9d1d9;background:#161b22}}
 .tab.active{{background:#0d1117;color:#f0f6fc;border-color:#30363d;border-bottom-color:#0d1117}}
@@ -454,18 +561,21 @@ h2{{font-size:1rem;font-weight:600;padding:10px 14px;border-radius:6px;margin-bo
 .tab-panel.active{{display:block}}
 .cnt{{font-weight:400;color:#8b949e;font-size:0.85rem}}
 table{{width:100%;border-collapse:collapse}}
-th{{text-align:left;padding:7px 12px;color:#8b949e;border-bottom:1px solid #21262d;font-weight:500;font-size:0.75rem;text-transform:uppercase;letter-spacing:.06em}}
-td{{padding:8px 12px;border-bottom:1px solid #161b22;vertical-align:middle}}
+th{{text-align:left;padding:7px 8px;color:#8b949e;border-bottom:1px solid #21262d;font-weight:500;font-size:0.75rem;text-transform:uppercase;letter-spacing:.06em}}
+td{{padding:7px 8px;border-bottom:1px solid #161b22;vertical-align:middle}}
 tr.hidden{{display:none}}
 tr:hover td{{background:#161b22}}
 .age{{text-align:center;white-space:nowrap;width:36px}}
-.co{{font-weight:600;color:#f0f6fc;white-space:nowrap;min-width:130px}}
-.role{{color:#c9d1d9;max-width:380px}}
-.loc{{color:#8b949e;font-size:0.82rem;white-space:nowrap;min-width:110px}}
+.co{{font-weight:600;color:#f0f6fc}}
+.role{{color:#c9d1d9;overflow-wrap:break-word;word-break:break-word}}
+.loc{{color:#8b949e;font-size:0.82rem}}
 .badge{{display:inline-block;padding:2px 7px;border-radius:4px;font-size:0.68rem;font-weight:700;color:#fff;letter-spacing:.05em;white-space:nowrap}}
 button{{font-family:inherit;cursor:pointer;border:none}}
 .btn{{display:inline-block;padding:4px 11px;background:#21262d;color:#79c0ff;border-radius:5px;font-size:0.8rem;font-weight:500;white-space:nowrap}}
 .btn:hover{{background:#30363d;color:#58a6ff}}
+.save-cell{{width:28px;text-align:center}}
+.save-btn{{background:none;color:#484f58;padding:2px 6px;border-radius:3px;font-size:0.9rem}}
+.save-btn:hover{{color:#f0c040;background:#1a1600}}
 .skip-cell{{width:28px;text-align:center}}
 .skip-btn{{background:none;color:#484f58;padding:2px 6px;border-radius:3px;font-size:0.9rem}}
 .skip-btn:hover{{color:#f85149;background:#1a0808}}
@@ -480,6 +590,7 @@ button{{font-family:inherit;cursor:pointer;border:none}}
 .submitted-row td{{opacity:0.65}}
 .submitted-row .co,.submitted-row .role{{text-decoration:line-through}}
 .submitted-row .date-submitted,.submitted-row .undo-btn{{text-decoration:none;opacity:1}}
+.saved-row td{{opacity:0.8}}
 .skipped-row td{{opacity:0.45}}
 .skipped-row .co,.skipped-row .role{{text-decoration:line-through}}
 .skipped-row .undo-btn{{opacity:1}}
@@ -488,32 +599,43 @@ button{{font-family:inherit;cursor:pointer;border:none}}
 </head>
 <body>
 <h1>Summer 2026 Internships</h1>
-<p class="meta">Generated {ts} &nbsp;·&nbsp; {len(preferred)} preferred ATS &nbsp;·&nbsp; {len(other)} other &nbsp;·&nbsp; {len(jobs)} total</p>
+<p class="meta">Generated {ts} &nbsp;·&nbsp; {len(quick)} quick apply &nbsp;·&nbsp; {len(account)} account required &nbsp;·&nbsp; {len(jobs)} total</p>
 
 <div class="tab-bar">
-  <button class="tab" data-tab="preferred" onclick="switchTab('preferred')">&#11088; Preferred ({len(preferred)})</button>
-  <button class="tab" data-tab="other" onclick="switchTab('other')">Other ({len(other)})</button>
-  <button class="tab" data-tab="submitted" onclick="switchTab('submitted')">&#10003; Submitted <span id="submitted-tab-cnt">(0)</span></button>
-  <button class="tab" data-tab="hidden" onclick="switchTab('hidden')">Hidden <span id="hidden-tab-cnt">(0)</span></button>
+  <button class="tab" data-tab="quick"     onclick="switchTab('quick')">Quick Apply <span id="quick-tab-cnt">({len(quick)})</span></button>
+  <button class="tab" data-tab="account"   onclick="switchTab('account')">Account Required <span id="account-tab-cnt">({len(account)})</span></button>
+  <button class="tab" data-tab="saved"     onclick="switchTab('saved')">Saved <span id="saved-tab-cnt">(0)</span></button>
+  <button class="tab" data-tab="submitted" onclick="switchTab('submitted')">Submitted <span id="submitted-tab-cnt">(0)</span></button>
+  <button class="tab" data-tab="hidden"    onclick="switchTab('hidden')">Hidden <span id="hidden-tab-cnt">(0)</span></button>
 </div>
 
 <div id="search-wrap" class="search-wrap">
   <input id="search" type="text" placeholder="Filter by company or role..." oninput="filterRows(this.value)">
 </div>
 
-<div id="tab-preferred" class="tab-panel active">
-{_section("Ashby · Greenhouse · Lever", preferred, "preferred")}
+<div id="tab-quick" class="tab-panel active">
+{_section("Quick Apply", quick, "quick")}
 </div>
 
-<div id="tab-other" class="tab-panel">
-{_section("Other Direct Links", other, "other")}
+<div id="tab-account" class="tab-panel">
+{_section("Account Required", account, "account")}
+</div>
+
+<div id="tab-saved" class="tab-panel">
+  <div class="section saved-section">
+    <h2>Saved</h2>
+    <table>
+      <thead><tr><th>Age</th><th>Company</th><th>Role</th><th>Location</th><th>ATS</th><th></th><th></th><th></th></tr></thead>
+      <tbody id="saved-tbody"></tbody>
+    </table>
+  </div>
 </div>
 
 <div id="tab-submitted" class="tab-panel">
   <div class="section submitted-section">
-    <h2>&#10003; Submitted</h2>
+    <h2>Submitted</h2>
     <table>
-      <thead><tr><th>Age</th><th>Company</th><th>Role</th><th>Location</th><th>ATS</th><th>Submitted</th><th></th></tr></thead>
+      <thead><tr><th>Age</th><th>Company</th><th>Role</th><th>Location</th><th>ATS</th><th>Submitted</th><th></th><th></th></tr></thead>
       <tbody id="submitted-tbody"></tbody>
     </table>
   </div>
@@ -523,7 +645,7 @@ button{{font-family:inherit;cursor:pointer;border:none}}
   <div class="section hidden-section">
     <h2>Hidden</h2>
     <table>
-      <thead><tr><th>Age</th><th>Company</th><th>Role</th><th>Location</th><th>ATS</th><th></th><th></th></tr></thead>
+      <thead><tr><th>Age</th><th>Company</th><th>Role</th><th>Location</th><th>ATS</th><th></th><th></th><th></th></tr></thead>
       <tbody id="hidden-tbody"></tbody>
     </table>
   </div>
@@ -544,9 +666,9 @@ OUT = Path("jobs.html")
 
 def run_once(open_browser: bool = False) -> None:
     jobs = fetch_jobs()
-    preferred = [j for j in jobs if j["ats"] in PREFERRED_ATS]
-    other     = [j for j in jobs if j["ats"] not in PREFERRED_ATS]
-    print(f"  {len(preferred)} Ashby/Greenhouse/Lever  |  {len(other)} other  |  {len(jobs)} total")
+    quick   = [j for j in jobs if j["ats"] in QUICK_ATS or j["ats"] not in ACCOUNT_ATS]
+    account = [j for j in jobs if j["ats"] in ACCOUNT_ATS]
+    print(f"  {len(quick)} quick apply  |  {len(account)} account required  |  {len(jobs)} total")
     OUT.write_text(generate_html(jobs), encoding="utf-8")
     print(f"  Written → {OUT.resolve()}")
     if open_browser:

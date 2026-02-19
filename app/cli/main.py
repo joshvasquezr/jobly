@@ -19,8 +19,9 @@ import json
 import os
 import subprocess
 import sys
+import time
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -81,6 +82,50 @@ def get_cfg(config_path: Optional[Path] = None) -> AppConfig:
         setup_logging(_cfg.log_dir)
         init_db(str(_cfg.db_path))
     return _cfg
+
+
+# ─── Shared storage helper ────────────────────────────────────────────────────
+
+
+def _store_jobs(
+    session,
+    jobs: list,
+    source_email_db_id: Optional[str] = None,
+    dry_run: bool = False,
+) -> tuple[int, int]:
+    """
+    Deduplicate and store a list of ParsedJob into the DB.
+    Returns (total, new_count).
+    """
+    total = len(jobs)
+    new_count = 0
+    for job in jobs:
+        existing = session.exec(
+            select(JobPost).where(JobPost.url_hash == job.url_hash)
+        ).first()
+        if existing:
+            console.print(f"    [dim]↩  Duplicate: {job.company} — {job.title}[/dim]")
+            continue
+        if dry_run:
+            console.print(
+                f"    [dim](dry-run)[/dim] {job.company} — {job.title} [{job.ats_type}]"
+            )
+            new_count += 1
+            continue
+        jp = JobPost(
+            url_hash=job.url_hash,
+            company=job.company,
+            title=job.title,
+            location=job.location,
+            url=job.url,
+            ats_type=job.ats_type,
+            source_email_id=source_email_db_id,
+            discovered_at=job.discovered_at,
+            status=JobStatus.discovered,
+        )
+        session.add(jp)
+        new_count += 1
+    return total, new_count
 
 
 # ─── Question resolver ────────────────────────────────────────────────────────
@@ -216,113 +261,157 @@ def auth(
 def fetch(
     config_path: Annotated[Optional[Path], typer.Option("--config", "-c")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    source: Annotated[str, typer.Option("--source")] = "github",
 ) -> None:
-    """Fetch latest SWEList email(s), parse jobs, and store in DB."""
+    """Fetch new jobs and store in DB. Sources: github (default), gmail, all."""
     cfg = get_cfg(config_path)
     console.print(Panel("[bold cyan]jobly fetch[/bold cyan]", border_style="cyan"))
 
-    # ── Auth ──────────────────────────────────────────────────────────────────
-    try:
-        creds = authenticate(cfg.credentials_path, cfg.token_path)
-    except FileNotFoundError as e:
-        console.print(f"[red]Error:[/red] {e}")
+    valid_sources = {"github", "gmail", "all"}
+    if source not in valid_sources:
+        console.print(
+            f"[red]Invalid source:[/red] {source!r}. Choose from: {', '.join(sorted(valid_sources))}"
+        )
         raise typer.Exit(1)
 
-    with get_session(str(cfg.db_path)) as session:
-        # Get already-seen gmail IDs to skip
-        seen_ids = set(
-            row.gmail_id for row in session.exec(select(Email)).all()
-        )
+    total_jobs = 0
+    total_new = 0
 
-        console.print(
-            f"  Querying Gmail for [bold]{cfg.gmail.sender_filter}[/bold] "
-            f"(lookback: {cfg.gmail.lookback_days}d) ..."
-        )
+    # ── GitHub README source ──────────────────────────────────────────────────
+    if source in ("github", "all"):
+        from app.sources.github_readme import fetch_github_jobs
 
+        console.print("  [bold]Source: GitHub README[/bold]")
         try:
-            raw_emails = fetch_digest_emails(creds, cfg.gmail, already_seen=seen_ids)
+            jobs = fetch_github_jobs(cfg.filter)
         except RuntimeError as e:
-            console.print(f"[red]Gmail error:[/red] {e}")
+            console.print(f"  [red]GitHub fetch error:[/red] {e}")
+        else:
+            console.print(f"  Fetched [bold]{len(jobs)}[/bold] relevant job(s)")
+            with get_session(str(cfg.db_path)) as session:
+                t, n = _store_jobs(session, jobs, source_email_db_id=None, dry_run=dry_run)
+                if not dry_run:
+                    session.commit()
+            total_jobs += t
+            total_new += n
+
+    # ── Gmail source ──────────────────────────────────────────────────────────
+    if source in ("gmail", "all"):
+        console.print("  [bold]Source: Gmail[/bold]")
+        try:
+            creds = authenticate(cfg.credentials_path, cfg.token_path)
+        except FileNotFoundError as e:
+            console.print(f"  [red]Error:[/red] {e}")
             raise typer.Exit(1)
 
-        if not raw_emails:
-            console.print("  [yellow]No new emails found.[/yellow]")
-            return
+        with get_session(str(cfg.db_path)) as session:
+            seen_ids = set(
+                row.gmail_id for row in session.exec(select(Email)).all()
+            )
+            console.print(
+                f"  Querying Gmail for [bold]{cfg.gmail.sender_filter}[/bold] "
+                f"(lookback: {cfg.gmail.lookback_days}d) ..."
+            )
+            try:
+                raw_emails = fetch_digest_emails(creds, cfg.gmail, already_seen=seen_ids)
+            except RuntimeError as e:
+                console.print(f"  [red]Gmail error:[/red] {e}")
+                raise typer.Exit(1)
 
-        console.print(f"  Found [bold]{len(raw_emails)}[/bold] new email(s)")
+            if not raw_emails:
+                console.print("  [yellow]No new emails found.[/yellow]")
+            else:
+                console.print(f"  Found [bold]{len(raw_emails)}[/bold] new email(s)")
 
-        total_jobs = 0
-        total_new = 0
-
-        for raw in raw_emails:
-            console.print(f"\n  Processing: [bold]{raw.subject}[/bold] ({raw.received_at.date()})")
-
-            # Store email record
-            if not dry_run:
-                email_record = Email(
-                    gmail_id=raw.gmail_id,
-                    thread_id=raw.thread_id,
-                    subject=raw.subject,
-                    sender=raw.sender,
-                    received_at=raw.received_at,
-                    raw_html=raw.html_body,
-                    status=EmailStatus.raw,
-                )
-                session.add(email_record)
-                session.commit()
-
-            # Parse jobs
-            jobs = parse_email_html(raw.html_body, source_email_id=raw.gmail_id)
-            console.print(f"  Parsed [bold]{len(jobs)}[/bold] job(s)")
-            total_jobs += len(jobs)
-
-            for job in jobs:
-                # Check for existing job by URL hash
-                existing = session.exec(
-                    select(JobPost).where(JobPost.url_hash == job.url_hash)
-                ).first()
-
-                if existing:
+                for raw in raw_emails:
                     console.print(
-                        f"    [dim]↩  Duplicate: {job.company} — {job.title}[/dim]"
+                        f"\n  Processing: [bold]{raw.subject}[/bold] ({raw.received_at.date()})"
                     )
-                    continue
 
-                if dry_run:
-                    console.print(
-                        f"    [dim](dry-run)[/dim] {job.company} — {job.title} [{job.ats_type}]"
+                    email_record = None
+                    if not dry_run:
+                        email_record = Email(
+                            gmail_id=raw.gmail_id,
+                            thread_id=raw.thread_id,
+                            subject=raw.subject,
+                            sender=raw.sender,
+                            received_at=raw.received_at,
+                            raw_html=raw.html_body,
+                            status=EmailStatus.raw,
+                        )
+                        session.add(email_record)
+                        session.commit()
+
+                    jobs = parse_email_html(raw.html_body, source_email_id=raw.gmail_id)
+                    console.print(f"  Parsed [bold]{len(jobs)}[/bold] job(s)")
+                    total_jobs += len(jobs)
+
+                    source_db_id = email_record.id if email_record else None
+                    t, n = _store_jobs(
+                        session, jobs, source_email_db_id=source_db_id, dry_run=dry_run
                     )
-                    total_new += 1
-                    continue
+                    total_new += n
 
-                jp = JobPost(
-                    url_hash=job.url_hash,
-                    company=job.company,
-                    title=job.title,
-                    location=job.location,
-                    url=job.url,
-                    ats_type=job.ats_type,
-                    source_email_id=raw.gmail_id,
-                    discovered_at=job.discovered_at,
-                    status=JobStatus.discovered,
-                )
-                session.add(jp)
-                total_new += 1
-
-            if not dry_run:
-                # Mark email as parsed
-                email_record = session.exec(
-                    select(Email).where(Email.gmail_id == raw.gmail_id)
-                ).first()
-                if email_record:
-                    email_record.status = EmailStatus.parsed
-                    email_record.processed_at = datetime.utcnow()
-                session.commit()
+                    if not dry_run:
+                        email_record = session.exec(
+                            select(Email).where(Email.gmail_id == raw.gmail_id)
+                        ).first()
+                        if email_record:
+                            email_record.status = EmailStatus.parsed
+                            email_record.processed_at = datetime.utcnow()
+                        session.commit()
 
     console.print(
         f"\n[bold green]Fetch complete.[/bold green] "
         f"{total_jobs} total, [bold]{total_new}[/bold] new jobs stored."
     )
+
+
+@app.command()
+def watch(
+    config_path: Annotated[Optional[Path], typer.Option("--config", "-c")] = None,
+    interval: Annotated[int, typer.Option("--interval")] = 120,
+    source: Annotated[str, typer.Option("--source")] = "github",
+) -> None:
+    """Poll for new jobs in a foreground loop every INTERVAL minutes (Ctrl+C to stop)."""
+    cfg = get_cfg(config_path)
+    console.print(Panel(
+        f"[bold cyan]jobly watch[/bold cyan]\n"
+        f"Polling every [bold]{interval}[/bold] min  •  source=[bold]{source}[/bold]\n"
+        "Press [bold]Ctrl+C[/bold] to stop.",
+        border_style="cyan",
+    ))
+
+    from app.sources.github_readme import fetch_github_jobs
+
+    try:
+        while True:
+            now = datetime.utcnow()
+            console.print(
+                f"\n[dim]{now.strftime('%Y-%m-%d %H:%M:%S UTC')}[/dim] "
+                f"Fetching from [bold]{source}[/bold]..."
+            )
+
+            if source in ("github", "all"):
+                try:
+                    jobs = fetch_github_jobs(cfg.filter)
+                    console.print(f"  Fetched [bold]{len(jobs)}[/bold] relevant job(s)")
+                    with get_session(str(cfg.db_path)) as session:
+                        _t, n = _store_jobs(session, jobs)
+                        session.commit()
+                    console.print(f"  [bold green]{n}[/bold green] new job(s) stored")
+                except RuntimeError as e:
+                    console.print(f"  [red]GitHub fetch error:[/red] {e}")
+
+            next_check = datetime.utcnow() + timedelta(minutes=interval)
+            console.print(
+                f"  [dim]Next check at {next_check.strftime('%H:%M:%S UTC')} "
+                f"(in {interval} min)[/dim]"
+            )
+            time.sleep(interval * 60)
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Watch stopped.[/yellow]")
 
 
 @app.command()

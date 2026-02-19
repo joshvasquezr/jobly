@@ -81,7 +81,7 @@ def detect_ats_from_url(url: str) -> str:
     url_lower = url.lower()
     if "ashbyhq.com" in url_lower or "jobs.ashby" in url_lower:
         return "ashby"
-    if "greenhouse.io" in url_lower or "grnh.se" in url_lower:
+    if "greenhouse.io" in url_lower or "grnh.se" in url_lower or "gh_jid=" in url_lower:
         return "greenhouse"
     if "lever.co" in url_lower:
         return "lever"
@@ -89,8 +89,14 @@ def detect_ats_from_url(url: str) -> str:
         return "workday"
     if "smartrecruiters.com" in url_lower:
         return "smartrecruiters"
-    if "icims.com" in url_lower:
+    if "icims.com" in url_lower or "icims=1" in url_lower:
         return "icims"
     if "taleo.net" in url_lower:
         return "taleo"
+    if "workable.com" in url_lower:
+        return "workable"
+    if "breezy.hr" in url_lower:
+        return "breezy"
+    if "simplify.jobs" in url_lower:
+        return "simplify"
     return "unknown"
