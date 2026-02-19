@@ -1,0 +1,19 @@
+# Generated output
+jobs.html
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+.pytest_cache/
+
+# Secrets & personal files
+.env
+resume.pdf
+
+# Editor / OS
+.DS_Store
+.claude/
