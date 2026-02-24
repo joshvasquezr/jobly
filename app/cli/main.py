@@ -981,6 +981,87 @@ def reset(
         )
 
 
+@app.command()
+def review(
+    jd_file: Annotated[Path, typer.Argument(help="Path to job description .txt file")],
+    latex_dir: Annotated[
+        Optional[Path],
+        typer.Option("--latex-dir", "-l", help="Directory containing base .tex resume files"),
+    ] = None,
+    no_pdf: Annotated[bool, typer.Option("--no-pdf", help="Skip PDF compilation")] = False,
+    config_path: Annotated[Optional[Path], typer.Option("--config", "-c")] = None,
+) -> None:
+    """Select and tailor the best resume for a job description, then compile to PDF."""
+    cfg = get_cfg(config_path)
+
+    if not jd_file.exists():
+        console.print(f"[red]Error:[/red] JD file not found: {jd_file}")
+        raise typer.Exit(1)
+
+    api_key = cfg.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        console.print(
+            "[red]Error:[/red] No Anthropic API key found. "
+            "Set ANTHROPIC_API_KEY or add it to your config."
+        )
+        raise typer.Exit(1)
+
+    # Default: ~/Desktop/LaTex/tex-files (where the source .tex files live)
+    if latex_dir is None:
+        latex_dir = Path.home() / "Desktop" / "LaTex" / "tex-files"
+
+    if not latex_dir.exists():
+        console.print(f"[red]Error:[/red] LaTeX directory not found: {latex_dir}")
+        raise typer.Exit(1)
+
+    console.print(Panel("[bold cyan]jobly review[/bold cyan]", border_style="cyan"))
+    console.print(f"  JD:         [bold]{jd_file}[/bold]")
+    console.print(f"  LaTeX dir:  [bold]{latex_dir}[/bold]")
+    console.print(f"  Compile PDF: [bold]{'no' if no_pdf else 'yes'}[/bold]")
+
+    from app.llm.resume_reviewer import review_jd, get_experience_bank
+
+    bank_path = latex_dir.parent / "experiences.yaml"
+    if bank_path.exists():
+        console.print(f"  Experience bank: [bold]{bank_path}[/bold]")
+    else:
+        console.print("  Experience bank: [dim]not found (using base .tex files only)[/dim]")
+
+    jd_text = jd_file.read_text().strip()
+
+    with console.status("[bold cyan]Calling Claude API — reasoning about your resume...[/bold cyan]"):
+        try:
+            result = review_jd(
+                jd_text=jd_text,
+                latex_dir=latex_dir,
+                api_key=api_key,
+                compile_pdf=not no_pdf,
+            )
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(1)
+
+    console.print()
+    console.print(f"  [green]✓[/green] Chosen base:  [bold]{result.chosen}[/bold]")
+    console.print(f"  [green]✓[/green] Output .tex:  [bold]{result.tex_path}[/bold]")
+
+    if not no_pdf:
+        if result.pdf_path:
+            console.print(f"  [green]✓[/green] PDF compiled: [bold]{result.pdf_path}[/bold]")
+        else:
+            console.print(
+                "  [yellow]![/yellow] PDF compilation failed — "
+                "check the .tex file or run pdflatex manually."
+            )
+
+    console.print()
+    console.print(Panel(
+        result.summary,
+        title="[cyan]Key Changes[/cyan]",
+        border_style="cyan",
+    ))
+
+
 @app.command(name="config")
 def show_config(
     config_path: Annotated[Optional[Path], typer.Option("--config", "-c")] = None,
