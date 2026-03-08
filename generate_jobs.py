@@ -27,29 +27,6 @@ _README_URL = (
     "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md"
 )
 
-# Only roles whose title contains one of these (case-insensitive)
-TITLE_KEYWORDS = [
-    "software engineer",
-    "software developer",
-    "software development",
-    "swe intern",
-    "backend",
-    "backend engineer",
-    "systems engineer",
-    "infrastructure",
-    "platform engineer",
-    "data engineer",
-    "database",
-    "distributed systems",
-    "site reliability",
-    "sre",
-    "devops",
-    "ml engineer",
-    "machine learning engineer",
-    "ai engineer",
-    "research engineer",
-    "computer science",
-]
 
 # No login needed — apply in minutes
 QUICK_ATS = {
@@ -65,6 +42,12 @@ ACCOUNT_ATS = {
     "dayforce", "adp", "bamboohr", "bullhorn",
 }
 # Everything else (unknown ATS) defaults to Quick Apply
+
+# README section headers to parse (in order)
+_TARGET_SECTIONS = [
+    "## \U0001f4bb Software Engineering Internship Roles",
+    "## \U0001f916 Data Science, AI & Machine Learning Internship Roles",
+]
 
 # Drop listings older than this many days
 MAX_AGE_DAYS = 60
@@ -149,26 +132,9 @@ def _parse_age_days(raw: str) -> int:
     return n * {"d": 1, "w": 7, "mo": 30}[unit]
 
 
-def fetch_jobs() -> list[dict]:
-    print(f"  Fetching README...")
-    resp = httpx.get(_README_URL, timeout=30, follow_redirects=True)
-    resp.raise_for_status()
-
-    soup = BeautifulSoup(resp.text, "lxml")
-
-    # Find the main internship table
-    table = None
-    for t in soup.find_all("table"):
-        headers = [th.get_text(strip=True) for th in t.find_all("th")]
-        if "Company" in headers and "Role" in headers and "Application" in headers:
-            table = t
-            break
-    if not table:
-        raise RuntimeError("Could not find the internship table in README.")
-
-    keywords_lower = [k.lower() for k in TITLE_KEYWORDS]
+def _parse_table(table, seen_urls: set[str]) -> list[dict]:
+    """Extract job dicts from a single internship table."""
     jobs: list[dict] = []
-    seen_urls: set[str] = set()
     current_company: Optional[str] = None
 
     for row in table.find_all("tr"):
@@ -198,18 +164,11 @@ def fetch_jobs() -> list[dict]:
         if not role:
             continue
 
-        # Be picky — must match at least one keyword
-        role_lower = role.lower()
-        if not any(kw in role_lower for kw in keywords_lower):
-            continue
-
         ats = detect_ats(url)
 
-        # Parse age with unit awareness; normalize to days
         age_str = _clean(age_td.get_text(strip=True)) if age_td else ""
         age_days = _parse_age_days(age_str)
 
-        # Drop stale listings
         if age_days > MAX_AGE_DAYS:
             continue
 
@@ -222,6 +181,49 @@ def fetch_jobs() -> list[dict]:
             "ats": ats,
             "age_days": age_days,
         })
+
+    return jobs
+
+
+def fetch_jobs() -> list[dict]:
+    print(f"  Fetching README...")
+    resp = httpx.get(_README_URL, timeout=30, follow_redirects=True)
+    resp.raise_for_status()
+    text = resp.text
+
+    # Split README at ## headings so we can target specific sections
+    section_breaks = [m.start() for m in re.finditer(r"^## ", text, re.MULTILINE)]
+    section_breaks.append(len(text))
+
+    def get_section_text(header: str) -> Optional[str]:
+        pos = text.find(header)
+        if pos < 0:
+            return None
+        next_break = next((b for b in section_breaks if b > pos), len(text))
+        return text[pos:next_break]
+
+    jobs: list[dict] = []
+    seen_urls: set[str] = set()
+
+    for header in _TARGET_SECTIONS:
+        section_text = get_section_text(header)
+        if not section_text:
+            print(f"  Warning: section not found — {header!r}")
+            continue
+
+        soup = BeautifulSoup(section_text, "lxml")
+        table = next(
+            (t for t in soup.find_all("table")
+             if {"Company", "Role", "Application"} <= {th.get_text(strip=True) for th in t.find_all("th")}),
+            None,
+        )
+        if not table:
+            print(f"  Warning: no table found in section — {header!r}")
+            continue
+
+        section_jobs = _parse_table(table, seen_urls)
+        print(f"  {len(section_jobs):3d} jobs from: {header}")
+        jobs.extend(section_jobs)
 
     return jobs
 
@@ -487,6 +489,8 @@ function _updateTabCount(section) {
   const tbody = document.getElementById(section + "-tbody");
   const span  = document.getElementById(section + "-tab-cnt");
   if (tbody && span) span.textContent = "(" + tbody.rows.length + ")";
+  const metaSpan = document.getElementById("meta-" + section + "-cnt");
+  if (tbody && metaSpan) metaSpan.textContent = tbody.rows.length;
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
@@ -599,7 +603,7 @@ button{{font-family:inherit;cursor:pointer;border:none}}
 </head>
 <body>
 <h1>Summer 2026 Internships</h1>
-<p class="meta">Generated {ts} &nbsp;·&nbsp; {len(quick)} quick apply &nbsp;·&nbsp; {len(account)} account required &nbsp;·&nbsp; {len(jobs)} total</p>
+<p class="meta">Generated {ts} &nbsp;·&nbsp; <span id="meta-quick-cnt">{len(quick)}</span> quick apply &nbsp;·&nbsp; <span id="meta-account-cnt">{len(account)}</span> account required &nbsp;·&nbsp; {len(jobs)} total</p>
 
 <div class="tab-bar">
   <button class="tab" data-tab="quick"     onclick="switchTab('quick')">Quick Apply <span id="quick-tab-cnt">({len(quick)})</span></button>
